@@ -1,0 +1,11 @@
+!.env.example
+*.log
+*.xcodeproj
+.DS_Store
+.build/
+.env
+.env.*
+.swiftpm/
+build/
+dist/
+node_modules/
