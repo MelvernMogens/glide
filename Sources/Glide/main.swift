@@ -11,6 +11,14 @@ case "--inject":
 case "--scrollcam":
     let a = args.dropFirst().compactMap(Double.init)
     Tools.scrollcam(x: a[0], y: a[1], h: a[2], seconds: a[3], horizontal: args.contains("horizontal"))
+case "--action":
+    Tools.action(args.dropFirst().first ?? "")
+case "--button":
+    Tools.button(Array(args.dropFirst()))
+case "--login-item":
+    Tools.loginItem(args.dropFirst().first ?? "status")
+case "--snapshot":
+    Tools.snapshot(args.dropFirst().first ?? "/tmp/glide-menu.png")
 case "--receiver":
     Tools.receiver(log: args.dropFirst().first ?? "/tmp/glide-receiver.jsonl")
 default:

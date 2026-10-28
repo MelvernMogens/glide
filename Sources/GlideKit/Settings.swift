@@ -75,6 +75,18 @@ public enum ButtonAction: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+/// What "hold a button + scroll" does.
+public enum ScrollGestureMode: String, Codable, CaseIterable, Sendable {
+    case zoom, desktopLaunchpad, spaces
+    public var title: String {
+        switch self {
+        case .zoom: return "Zoom (pinch)"
+        case .desktopLaunchpad: return "Desktop & Launchpad"
+        case .spaces: return "Move between Spaces"
+        }
+    }
+}
+
 public struct ButtonRemap: Codable, Equatable, Hashable, Sendable {
     public var button: MouseButton
     public var trigger: ButtonTrigger
@@ -120,6 +132,7 @@ public struct GlideSettings: Codable, Equatable, Sendable {
     public var dragGestureButton: MouseButton? = nil
     /// Hold this button + scroll = pinch to zoom. nil = off.
     public var scrollGestureButton: MouseButton? = nil
+    public var scrollGestureMode: ScrollGestureMode = .zoom
 
     public var exceptions: [AppException] = []
     public var launchAtLogin = false
@@ -128,7 +141,7 @@ public struct GlideSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case enabled, smoothness, speed, reverseDirection, trackpadSimulation, modifiers
-        case remapsEnabled, remaps, dragGestureButton, scrollGestureButton, exceptions, launchAtLogin
+        case remapsEnabled, remaps, dragGestureButton, scrollGestureButton, scrollGestureMode, exceptions, launchAtLogin
     }
 
     public init(from decoder: Decoder) throws {
@@ -148,6 +161,7 @@ public struct GlideSettings: Codable, Equatable, Sendable {
         }
         dragGestureButton = (try? c.decodeIfPresent(MouseButton.self, forKey: .dragGestureButton)) ?? nil
         scrollGestureButton = (try? c.decodeIfPresent(MouseButton.self, forKey: .scrollGestureButton)) ?? nil
+        scrollGestureMode = v(.scrollGestureMode, d.scrollGestureMode)
         if let raw = try? c.decodeIfPresent([Lenient<AppException>].self, forKey: .exceptions) {
             exceptions = raw.compactMap(\.value).filter { !$0.bundleID.isEmpty }
         }

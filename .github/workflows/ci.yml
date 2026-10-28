@@ -5,17 +5,17 @@ on:
     branches: [master, main]
   pull_request:
 
+# macOS runners aren't available for private repos on the free plan, so build + `swift test`
+# run locally (see HERMES.md). CI keeps the cheap secret scan.
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # {{SETUP_STEPS}} — language runtime + dependency install
-      # {{CHECK_STEPS}} — the project's real typecheck / lint / test commands
 
       - name: Fail if a secret got committed
         run: |
-          if git ls-files | grep -E '(^|/)\.env$|\.db$|\.pem$|credentials'; then
+          if git ls-files | grep -E '(^|/)\.env$|\.db$|\.pem$|\.p12$|credentials|\.glide-signing'; then
             echo "::error::A secret or local database file is tracked in git"
             exit 1
           fi

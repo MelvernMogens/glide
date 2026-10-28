@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import GlideKit
 
 /// Headless verification tools. None of these touch the user's saved settings.
@@ -9,6 +10,8 @@ enum Tools {
     /// latency percentiles at the end.
     static func probe(seconds: Double) -> Never {
         var s = GlideSettings()
+        if let j = ProcessInfo.processInfo.environment["GLIDE_SETTINGS_JSON"],
+           let decoded = try? JSONDecoder().decode(GlideSettings.self, from: Data(j.utf8)) { s = decoded }
         if let v = ProcessInfo.processInfo.environment["GLIDE_SMOOTHNESS"], let sm = Smoothness(rawValue: v) { s.smoothness = sm }
         if ProcessInfo.processInfo.environment["GLIDE_REVERSE"] == "0" { s.reverseDirection = false }
         let engine = Engine.shared
@@ -20,6 +23,26 @@ enum Tools {
         print("PROBE tap=on smoothness=\(s.smoothness.rawValue) speed=\(s.speed.rawValue) reverse=\(s.reverseDirection) trackpadSim=\(s.trackpadSimulation) systemNatural=\(systemNatural) invert=\(engine.invertDirection) refresh=\(NSScreen.main?.maximumFramesPerSecond ?? 0)Hz")
         setvbuf(stdout, nil, _IOLBF, 0)
         let start = Date()
+        func summary() -> Never {
+            let n = engine.latency.count
+            let xs = engine.latency.samples[0..<n].sorted()
+            func pct(_ p: Double) -> Double { xs.isEmpty ? 0 : xs[min(xs.count - 1, Int(Double(xs.count) * p))] * 1000 }
+            print(String(format: "PROBE t=%.0fs ticksIn=%d eventsOut=%d passthrough=%d tapEnabled=%@ reenables=%d",
+                         Date().timeIntervalSince(start), engine.ticksIn, engine.eventsOut, engine.passthrough,
+                         engine.tapIsEnabled ? "yes" : "no", engine.tapReenables))
+            print(String(format: "PROBE latency tap->first-post (ms) n=%d p50=%.3f p95=%.3f p99=%.3f max=%.3f frame=%.2f",
+                         n, pct(0.5), pct(0.95), pct(0.99), xs.last.map { $0 * 1000 } ?? 0, 1000.0 / Double(NSScreen.main?.maximumFramesPerSecond ?? 60)))
+            exit(0)
+        }
+        // SIGINT/SIGTERM print the summary too (the harness stops the probe that way).
+        signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN)
+        var sources: [DispatchSourceSignal] = []
+        for sig in [SIGINT, SIGTERM] {
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { engine.perform { summary() } }
+            src.resume()
+            sources.append(src)
+        }
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
             engine.perform {
                 print(String(format: "PROBE t=%.0fs ticksIn=%d eventsOut=%d passthrough=%d tapEnabled=%@ reenables=%d",
@@ -28,16 +51,10 @@ enum Tools {
             }
             if Date().timeIntervalSince(start) >= seconds {
                 t.invalidate()
-                engine.perform {
-                    let n = engine.latency.count
-                    let xs = engine.latency.samples[0..<n].sorted()
-                    func pct(_ p: Double) -> Double { xs.isEmpty ? 0 : xs[min(xs.count - 1, Int(Double(xs.count) * p))] * 1000 }
-                    print(String(format: "PROBE latency tap->first-post (ms) n=%d p50=%.3f p95=%.3f p99=%.3f max=%.3f frame=%.2f",
-                                 n, pct(0.5), pct(0.95), pct(0.99), xs.last.map { $0 * 1000 } ?? 0, 1000.0 / Double(NSScreen.main?.maximumFramesPerSecond ?? 60)))
-                    exit(0)
-                }
+                engine.perform { summary() }
             }
         }
+        withExtendedLifetime(sources) {}
         NSApplication.shared.setActivationPolicy(.prohibited)
         NSApplication.shared.run()
         exit(0)
@@ -232,6 +249,84 @@ extension Tools {
             while uptime() < next { usleep(300) }
         }
         print(String(format: "SCROLLCAM done total=%.1f", total))
+        exit(0)
+    }
+}
+
+// MARK: - offscreen snapshot of the dropdown panel
+
+import SwiftUI
+
+extension Tools {
+    /// `glide --snapshot out.png`: render the menu panel with a throwaway settings suite.
+    static func snapshot(_ path: String) -> Never {
+        MainActor.assumeIsolated {
+            let suite = "glide.snapshot.\(getpid())"
+            let d = UserDefaults(suiteName: suite)!
+            let model = AppModel(defaults: d)
+            model.trusted = ProcessInfo.processInfo.environment["GLIDE_SNAPSHOT_UNTRUSTED"] == nil
+            let view = MenuPanel(model: model, openSettings: {}, snapshot: true)
+                .environment(\.colorScheme, .dark)
+                .background(Color(white: 0.16))
+            let r = ImageRenderer(content: view)
+            r.scale = 2
+            if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: path))
+                print("SNAPSHOT \(path) \(Int(img.size.width))x\(Int(img.size.height))pt")
+            }
+            d.removePersistentDomain(forName: suite)
+        }
+        exit(0)
+    }
+}
+
+// MARK: - action / button / login-item helpers
+
+extension Tools {
+    /// `glide --action missionControl|appExpose|showDesktop|launchpad|back|forward|smartZoom|middleClick`
+    static func action(_ name: String) -> Never {
+        let map: [String: ButtonAction] = ["missionControl": .missionControl, "appExpose": .appExpose, "showDesktop": .showDesktop,
+                                           "launchpad": .launchpad, "back": .back, "forward": .forward, "smartZoom": .smartZoom,
+                                           "middleClick": .middleClick]
+        guard let a = map[name] else { print("ACTION unknown \(name)"); exit(1) }
+        Gestures.run(a)
+        usleep(200_000)
+        print("ACTION \(name) sent (dockNotify=\(Gestures.dockSwipeAvailable ? "hid-ok" : "hid-missing"))")
+        exit(0)
+    }
+
+    /// `glide --button <3|4|5> down|up|drag <dx> <dy>` : post a raw "hardware" button event at the pointer.
+    static func button(_ a: [String]) -> Never {
+        guard a.count >= 2, let n = Int64(a[0]) else { exit(1) }
+        let loc = CGEvent(source: nil)?.location ?? .zero
+        let type: CGEventType = a[1] == "down" ? .otherMouseDown : (a[1] == "up" ? .otherMouseUp : .otherMouseDragged)
+        let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: loc, mouseButton: .center)!
+        e.setIntegerValueField(.mouseEventButtonNumber, value: n - 1)
+        e.setIntegerValueField(.eventSourceUserData, value: testMark)
+        if type == .otherMouseDragged, a.count >= 4 {
+            e.setIntegerValueField(.mouseEventDeltaX, value: Int64(a[2]) ?? 0)
+            e.setIntegerValueField(.mouseEventDeltaY, value: Int64(a[3]) ?? 0)
+        }
+        e.post(tap: .cghidEventTap)
+        exit(0)
+    }
+
+    /// `Glide --login-item on|off|status` (run from inside the installed .app bundle).
+    static func loginItem(_ v: String) -> Never {
+        let svc = SMAppService.mainApp
+        do {
+            if v == "on" { try svc.register() } else if v == "off" { try svc.unregister() }
+        } catch { print("LOGINITEM error \(error.localizedDescription)") }
+        let st: String
+        switch svc.status {
+        case .enabled: st = "enabled"
+        case .notRegistered: st = "notRegistered"
+        case .requiresApproval: st = "requiresApproval"
+        case .notFound: st = "notFound"
+        @unknown default: st = "unknown"
+        }
+        print("LOGINITEM status=\(st) bundle=\(Bundle.main.bundlePath)")
         exit(0)
     }
 }

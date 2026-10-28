@@ -151,6 +151,8 @@ final class Engine: NSObject, @unchecked Sendable {
         if let tap { CGEvent.tapEnable(tap: tap, enable: true); tapReenables += 1 }
     }
 
+    func reenableTapFromMain() { reenableTap() }
+
     var tapIsEnabled: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
 
     // MARK: hot path (called from tapCallback)
@@ -193,8 +195,21 @@ final class Engine: NSObject, @unchecked Sendable {
         pendingCount += 1
         emitFlags = flags & ~mode.consumedFlags
         ticksIn += 1
-        if let kickSource, let runLoop { CFRunLoopSourceSignal(kickSource); CFRunLoopWakeUp(runLoop) }
+        signalKick()
         return true
+    }
+
+    @inline(__always) func signalKick() {
+        if let kickSource, let runLoop { CFRunLoopSourceSignal(kickSource); CFRunLoopWakeUp(runLoop) }
+    }
+
+    /// Hold-button + scroll zoom (engine thread).
+    func addZoomTick(direction: Int, at t: Double) {
+        let p = ScrollProfile.zoom(speed: settings.speed)
+        zoom.addTick(zoomAccel.distance(direction: direction, at: t, profile: p), at: t, duration: p.baseDuration, profile: p)
+        if latency.pendingTickTime < 0 { latency.pendingTickTime = t }
+        advance()
+        link?.isPaused = false
     }
 
     private func negateDiscrete(_ e: CGEvent) {
@@ -223,6 +238,7 @@ final class Engine: NSObject, @unchecked Sendable {
 
     /// Kick: drain pending ticks and post the first frame right away.
     private func kick() {
+        buttons?.drain()
         let n = pendingCount
         guard n > 0 else { return }
         for i in 0..<n {
