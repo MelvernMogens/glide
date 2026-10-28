@@ -25,6 +25,7 @@ final class MenuController: NSObject, NSMenuDelegate {
         menu.autoenablesItems = false
 
         hosting = NSHostingView(rootView: MenuPanel(model: model, openSettings: { [weak self] in self?.openSettings() }))
+        hosting.sizingOptions = [.intrinsicContentSize]
         hosting.frame.size = hosting.fittingSize
         panelItem.view = hosting
         menu.addItem(panelItem)
@@ -39,6 +40,7 @@ final class MenuController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         model.trusted = AXIsProcessTrusted()
+        hosting.layoutSubtreeIfNeeded()
         hosting.frame.size = hosting.fittingSize
     }
 

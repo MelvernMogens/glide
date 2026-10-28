@@ -21,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             self?.model.refreshFrontApp()
         }
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
+            Engine.shared.screensChanged()
+        }
         DistributedNotificationCenter.default().addObserver(forName: .init("SwipeScrollDirectionDidChangeNotification"), object: nil, queue: .main) { _ in
             Engine.shared.refreshSystemDirection()
         }
@@ -39,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if model.engineRunning {
             Engine.shared.perform {
                 // A revoked grant disables the tap and re-enabling fails: reflect it.
-                let ok = Engine.shared.tapIsEnabled || !self.model.settings.enabled
+                let ok = Engine.shared.tapIsEnabled || !Engine.shared.settings.enabled
                 if !ok { Engine.shared.reenableTapFromMain() }
             }
         }

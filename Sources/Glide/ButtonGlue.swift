@@ -10,6 +10,11 @@ final class ButtonGlue {
     private var interceptMask: UInt8 = 0          // bit n = MouseButton rawValue n
     private var scrollButtonRaw = 0               // 0 = no hold+scroll gesture
     private var heldScrollButton = 0              // set in the callback while that button is down
+    private var dragMask: UInt8 = 0               // buttons whose drags Glide needs
+    private var passedDownRaw = 0                 // button currently re-posted as a plain press
+    private var needsReset = false                // set by the callback when the tap was disabled
+    private var cachedSpaces = 2
+    private var cachedScreen = CGSize(width: 1440, height: 900)
 
     // fixed input ring (callback -> kick)
     private struct Pending { var kind: UInt8 = 0; var button = 0; var dx = 0.0; var dy = 0.0; var t = 0.0 }
@@ -32,13 +37,37 @@ final class ButtonGlue {
     /// Engine thread.
     func settingsChanged() {
         let s = engine.settings
-        if dragging || scrollGestureActive { for o in machine.reset() { run(o) } }
-        machine = ButtonEngine(configs: s.enabled ? s.buttonConfigs : [:], doubleClickWindow: min(NSEvent.doubleClickInterval, 0.4))
-        var mask: UInt8 = 0
-        for b in machine.configs.keys { mask |= 1 << UInt8(b.rawValue) }
-        interceptMask = mask
-        scrollButtonRaw = s.enabled ? (s.scrollGestureButton?.rawValue ?? 0) : 0
+        let configs = s.enabled ? s.buttonConfigs : [:]
         scrollGestureMode = s.scrollGestureMode
+        // Only rebuild when the button setup really changed, and close whatever was in flight.
+        guard configs != machine.configs else { return }
+        resetAll()
+        machine = ButtonEngine(configs: configs, doubleClickWindow: min(NSEvent.doubleClickInterval, 0.4))
+        var mask: UInt8 = 0, dmask: UInt8 = 0
+        for (b, c) in configs { mask |= 1 << UInt8(b.rawValue); if c.drag { dmask |= 1 << UInt8(b.rawValue) } }
+        interceptMask = mask
+        dragMask = dmask
+        scrollButtonRaw = s.enabled ? (s.scrollGestureButton?.rawValue ?? 0) : 0
+        heldScrollButton = 0
+    }
+
+    /// Engine thread: end any gesture / held press cleanly (settings change, quit, tap disabled).
+    func resetAll() {
+        for o in machine.reset() { run(o) }
+        if dragging, dragAxis != .none { Gestures.endDockSwipe() }
+        if scrollGestureActive, scrollGestureMode != .zoom { Gestures.endDockSwipe() }
+        dragging = false; dragAxis = .none; scrollGestureActive = false; scrollGestureBegun = false
+        if passedDownRaw != 0 { passedDownRaw = 0 }
+        heldScrollButton = 0
+        pendingCount = 0
+    }
+
+    /// Callback side: a disabled tap may have missed button releases. Forget held state now,
+    /// finish the cleanup on the kick.
+    @inline(__always) func tapWasDisabled() {
+        heldScrollButton = 0
+        needsReset = true
+        engine.signalKick()
     }
 
     // MARK: callback side (no allocation)
@@ -54,7 +83,10 @@ final class ButtonGlue {
         switch type {
         case .otherMouseDown: kind = 0; if raw == scrollButtonRaw { heldScrollButton = raw }
         case .otherMouseUp: kind = 1; if raw == heldScrollButton { heldScrollButton = 0 }
-        default: kind = 2
+        default:
+            // Drags only matter for drag gestures; a plain re-posted press must keep dragging in apps.
+            if dragMask & (1 << UInt8(raw)) == 0 || raw == passedDownRaw { return false }
+            kind = 2
         }
         pending[pendingCount] = Pending(kind: kind, button: raw,
                                         dx: Double(event.getIntegerValueField(.mouseEventDeltaX)),
@@ -79,6 +111,7 @@ final class ButtonGlue {
     // MARK: kick side (engine thread, after the callback returned)
 
     func drain() {
+        if needsReset { needsReset = false; resetAll() }
         let n = pendingCount
         guard n > 0 else { return }
         for i in 0..<n {
@@ -93,7 +126,10 @@ final class ButtonGlue {
             }
             for o in machine.handle(input) { run(o) }
             if p.kind == 2, dragging { dragMoved(dx: p.dx, dy: p.dy) }
-            if p.kind == 3, scrollGestureActive { scrollTick(direction: p.dy, t: p.t) }
+            if p.kind == 3 {
+                if scrollGestureActive { scrollTick(direction: p.dy, t: p.t) }
+                else { engine.fallbackScrollTick(direction: Int(p.dy), at: p.t) } // never drop a tick
+            }
         }
         pendingCount = 0
         armTimer()
@@ -103,10 +139,13 @@ final class ButtonGlue {
         switch o {
         case .passClick(let b):
             Synth.repostButton(b.cgButtonNumber, down: true); Synth.repostButton(b.cgButtonNumber, down: false)
-        case .passDown(let b): Synth.repostButton(b.cgButtonNumber, down: true)
-        case .passUp(let b): Synth.repostButton(b.cgButtonNumber, down: false)
+        case .passDown(let b): passedDownRaw = b.rawValue; Synth.repostButton(b.cgButtonNumber, down: true)
+        case .passUp(let b): passedDownRaw = 0; Synth.repostButton(b.cgButtonNumber, down: false)
         case .action(let a): Gestures.run(a)
-        case .dragBegan: dragging = true; dragAxis = .none
+        case .dragBegan:
+            dragging = true; dragAxis = .none
+            cachedSpaces = Gestures.spaceCount
+            cachedScreen = engine.screenSize
         case .dragMoved: break // handled with the raw deltas in drain()
         case .dragEnded:
             if dragging, dragAxis != .none { Gestures.endDockSwipe() }
@@ -128,10 +167,10 @@ final class ButtonGlue {
             guard dx != 0 || dy != 0 else { return }
             dragAxis = abs(dx) >= abs(dy) ? .horizontal : .vertical
         }
-        let screen = NSScreen.main?.frame.size ?? CGSize(width: 1440, height: 900)
+        let screen = cachedScreen
         let delta: Double
         if dragAxis == .horizontal {
-            let n = Gestures.spaceCount
+            let n = cachedSpaces
             let perSpace = n <= 1 ? 2.0 : 1 + 1 / Double(n - 1)
             delta = -dx * perSpace / (screen.width + 63)
         } else {

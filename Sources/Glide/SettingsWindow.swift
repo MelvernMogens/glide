@@ -44,9 +44,14 @@ struct SettingsView: View {
             }
             Section {
                 Toggle("Button remaps", isOn: $model.settings.remapsEnabled)
-                ForEach(model.settings.remaps.indices, id: \.self) { i in
-                    RemapRow(remap: $model.settings.remaps[i]) { model.settings.remaps.remove(at: i) }
-                        .disabled(!model.settings.remapsEnabled)
+                ForEach(Array(model.settings.remaps.enumerated()), id: \.offset) { i, r in
+                    // Bounds-checked binding + deferred delete: removing a row never indexes past the end.
+                    RemapRow(remap: Binding(
+                        get: { i < model.settings.remaps.count ? model.settings.remaps[i] : r },
+                        set: { if i < model.settings.remaps.count { model.settings.remaps[i] = $0 } })) {
+                        DispatchQueue.main.async { if i < model.settings.remaps.count { model.settings.remaps.remove(at: i) } }
+                    }
+                    .disabled(!model.settings.remapsEnabled)
                 }
                 Button {
                     model.settings.remaps.append(ButtonRemap(button: .button4, trigger: .click, action: .back))

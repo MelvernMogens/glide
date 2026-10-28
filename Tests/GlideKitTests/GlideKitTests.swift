@@ -411,6 +411,16 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(s.smoothingDisabled(forBundleID: nil))
     }
 
+    func testOneBadModifierKeepsTheOthers() {
+        let d = suite()
+        d.set(Data(#"{"modifiers":{"command":"warp","option":"swift","shift":"horizontal"},"scrollGestureMode":"spaces"}"#.utf8), forKey: SettingsStore.key)
+        let s = SettingsStore(defaults: d).load()
+        XCTAssertEqual(s.modifiers.command, .zoom, "bad value -> its own default")
+        XCTAssertEqual(s.modifiers.option, .swift)
+        XCTAssertEqual(s.modifiers.control, .swift, "missing -> default")
+        XCTAssertEqual(s.scrollGestureMode, .spaces)
+    }
+
     func testInterceptedButtonsOnlyWhenEnabled() {
         var s = GlideSettings()
         s.remaps = [ButtonRemap(button: .button4, trigger: .click, action: .missionControl)]

@@ -112,6 +112,18 @@ public struct ScrollModifiers: Codable, Equatable, Sendable {
     public var shift: ScrollModifierAction = .horizontal
     public var control: ScrollModifierAction = .swift
     public init() {}
+
+    enum CodingKeys: String, CodingKey { case command, option, shift, control }
+    /// One bad key falls back to its own default instead of resetting all four.
+    public init(from decoder: Decoder) throws {
+        let d = ScrollModifiers()
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        func v(_ k: CodingKeys, _ def: ScrollModifierAction) -> ScrollModifierAction {
+            (try? c?.decodeIfPresent(ScrollModifierAction.self, forKey: k)) ?? def
+        }
+        command = v(.command, d.command); option = v(.option, d.option)
+        shift = v(.shift, d.shift); control = v(.control, d.control)
+    }
 }
 
 /// Every user setting. Defaults reproduce Melvern's Mac Mouse Fix setup.

@@ -3,6 +3,8 @@ import ServiceManagement
 import GlideKit
 
 /// Headless verification tools. None of these touch the user's saved settings.
+nonisolated(unsafe) var probeSignalSources: [DispatchSourceSignal] = []
+
 enum Tools {
     static let testMark: Int64 = 0x7E57 // marks injected "hardware" ticks (not Glide output)
 
@@ -30,18 +32,18 @@ enum Tools {
             print(String(format: "PROBE t=%.0fs ticksIn=%d eventsOut=%d passthrough=%d tapEnabled=%@ reenables=%d",
                          Date().timeIntervalSince(start), engine.ticksIn, engine.eventsOut, engine.passthrough,
                          engine.tapIsEnabled ? "yes" : "no", engine.tapReenables))
+            print(String(format: "PROBE distance planned=%.1fpx posted=%.0fpx (carry-overs from interrupted moves are included once)", engine.pxPlanned, engine.pxOut))
             print(String(format: "PROBE latency tap->first-post (ms) n=%d p50=%.3f p95=%.3f p99=%.3f max=%.3f frame=%.2f",
                          n, pct(0.5), pct(0.95), pct(0.99), xs.last.map { $0 * 1000 } ?? 0, 1000.0 / Double(NSScreen.main?.maximumFramesPerSecond ?? 60)))
             exit(0)
         }
         // SIGINT/SIGTERM print the summary too (the harness stops the probe that way).
         signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN)
-        var sources: [DispatchSourceSignal] = []
         for sig in [SIGINT, SIGTERM] {
             let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             src.setEventHandler { engine.perform { summary() } }
             src.resume()
-            sources.append(src)
+            probeSignalSources.append(src) // global: must outlive this function
         }
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
             engine.perform {
@@ -54,7 +56,6 @@ enum Tools {
                 engine.perform { summary() }
             }
         }
-        withExtendedLifetime(sources) {}
         NSApplication.shared.setActivationPolicy(.prohibited)
         NSApplication.shared.run()
         exit(0)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Headless numbers without touching the screen: Glide's output goes to a sink process
 (GLIDE_TARGET) so nothing visible scrolls; injected wheel ticks are swallowed by Glide's tap.
+Note: while it runs (~20 s) a real mouse wheel is captured too and goes to the sink.
 Measures tap->post latency, idle + scrolling CPU, RAM, and that a kill -9 leaves no tap behind."""
 import ctypes, ctypes.util, os, re, subprocess, time
 
@@ -55,7 +56,7 @@ fp = subprocess.run(["footprint", str(p.pid)], capture_output=True, text=True).s
 print("footprint:", " ".join(l.strip() for l in fp.splitlines() if "Footprint" in l or "phys_footprint:" in l))
 p.terminate(); p.wait()
 out = open("/tmp/glide-headless-probe.out").read()
-print("\n".join(l for l in out.splitlines() if "latency" in l or l.startswith("PROBE tap")))
+print("\n".join(l for l in out.splitlines() if "latency" in l or "distance" in l or l.startswith("PROBE tap")))
 print([l for l in out.splitlines() if l.startswith("PROBE t=")][-1])
 
 # crash safety: kill -9 in the middle of a fling, then look for leftover taps

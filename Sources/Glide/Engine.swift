@@ -38,6 +38,8 @@ final class Engine: NSObject, @unchecked Sendable {
     var accel = TickAccelerator()
     var zoomAccel = TickAccelerator()
     var screenHeight = 900.0
+    var screenWidth = 1440.0
+    var screenSize: CGSize { CGSize(width: screenWidth, height: screenHeight) }
     var qv = Quantizer(), qh = Quantizer()
     var invertDirection = false          // computed from settings + system natural setting
     var smoothingOffForFrontApp = false
@@ -57,6 +59,7 @@ final class Engine: NSObject, @unchecked Sendable {
 
     // counters for --probe
     var ticksIn = 0, eventsOut = 0, passthrough = 0, tapReenables = 0
+    var pxPlanned = 0.0, pxOut = 0.0
 
     private(set) var isRunning = false
     var onTapStateChange: ((Bool) -> Void)?
@@ -67,7 +70,7 @@ final class Engine: NSObject, @unchecked Sendable {
     func start(settings: GlideSettings) -> Bool {
         let ready = DispatchSemaphore(value: 0)
         var ok = false
-        let screen = NSScreen.main
+        let newLink = makeLink()
         let t = Thread { [self] in
             self.settings = settings
             self.applySettingsOnThread()
@@ -79,16 +82,14 @@ final class Engine: NSObject, @unchecked Sendable {
                 ctx.perform = { info in Unmanaged<Engine>.fromOpaque(info!).takeUnretainedValue().kick() }
                 self.kickSource = CFRunLoopSourceCreate(nil, 0, &ctx)
                 CFRunLoopAddSource(self.runLoop, self.kickSource, .commonModes)
-                if let screen {
-                    self.screenHeight = Double(screen.frame.height)
-                    let l = screen.displayLink(target: self, selector: #selector(self.frame(_:)))
-                    let fps = Float(max(screen.maximumFramesPerSecond, 60))
-                    l.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
-                    l.isPaused = true
-                    l.add(to: .current, forMode: .common)
-                    self.link = l
-                    self.framePeriod = 1.0 / Double(fps)
-                }
+                self.install(newLink)
+                // Fallback frame clock if there is no display link (no screen, lid closed).
+                var tctx = CFRunLoopTimerContext()
+                tctx.info = Unmanaged.passUnretained(self).toOpaque()
+                self.fallbackTimer = CFRunLoopTimerCreate(nil, .greatestFiniteMagnitude, 1.0 / 60, 0, 0, { _, info in
+                    Unmanaged<Engine>.fromOpaque(info!).takeUnretainedValue().frameTick()
+                }, &tctx)
+                CFRunLoopAddTimer(self.runLoop, self.fallbackTimer, .commonModes)
                 self.buttons = ButtonGlue(engine: self)
             }
             ready.signal()
@@ -102,6 +103,48 @@ final class Engine: NSObject, @unchecked Sendable {
         t.start()
         ready.wait()
         return ok
+    }
+
+    private var fallbackTimer: CFRunLoopTimer?
+
+    /// Main thread: build a display link for the main screen (nil if there is no screen).
+    func makeLink() -> (CADisplayLink, Double, Double, Double)? {
+        guard let screen = NSScreen.main else { return nil }
+        let l = screen.displayLink(target: self, selector: #selector(frame(_:)))
+        let fps = Float(max(screen.maximumFramesPerSecond, 60))
+        l.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
+        l.isPaused = true
+        return (l, 1.0 / Double(fps), Double(screen.frame.height), Double(screen.frame.width))
+    }
+
+    /// Engine thread: swap in a new display link.
+    private func install(_ new: (CADisplayLink, Double, Double, Double)?) {
+        link?.invalidate()
+        link = nil
+        guard let (l, period, height, width) = new else { return }
+        screenWidth = width
+        l.add(to: .current, forMode: .common)
+        link = l
+        framePeriod = period
+        screenHeight = height
+    }
+
+    /// Main thread, on screen configuration changes.
+    func screensChanged() {
+        let new = makeLink()
+        perform { self.install(new); if self.animating { self.startFrames() } }
+    }
+
+    private var animating: Bool { vertical.isActive || horizontal.isActive || zoom.isActive }
+
+    private func startFrames() {
+        if let link { link.isPaused = false }
+        else if let fallbackTimer { CFRunLoopTimerSetNextFireDate(fallbackTimer, CFAbsoluteTimeGetCurrent() + framePeriod) }
+    }
+
+    private func stopFrames() {
+        link?.isPaused = true
+        if let fallbackTimer { CFRunLoopTimerSetNextFireDate(fallbackTimer, .greatestFiniteMagnitude) }
     }
 
     func update(settings: GlideSettings) {
@@ -124,6 +167,7 @@ final class Engine: NSObject, @unchecked Sendable {
         // Real wheel events already arrive flipped when the system setting is natural.
         invertDirection = settings.reverseDirection != systemNatural
         trackpadSim = settings.trackpadSimulation
+        Synth.invertedFromDevice = settings.reverseDirection ? 1 : 0
         if !settings.enabled { flushAll() }
         buttons?.settingsChanged()
     }
@@ -148,6 +192,7 @@ final class Engine: NSObject, @unchecked Sendable {
     }
 
     fileprivate func reenableTap() {
+        buttons?.tapWasDisabled()
         if let tap { CGEvent.tapEnable(tap: tap, enable: true); tapReenables += 1 }
     }
 
@@ -178,7 +223,7 @@ final class Engine: NSObject, @unchecked Sendable {
             // No smoothing: keep the discrete event, only fix direction / axis.
             passthrough += 1
             if invertDirection { negateDiscrete(e) }
-            if mode.horizontal && d2 == 0 { swapToHorizontal(e) }
+            if mode.horizontal && d2 == 0 { swapToHorizontal(e, clearing: mode.consumedFlags) }
             return false
         }
 
@@ -209,7 +254,7 @@ final class Engine: NSObject, @unchecked Sendable {
         zoom.addTick(zoomAccel.distance(direction: direction, at: t, profile: p), at: t, duration: p.baseDuration, profile: p)
         if latency.pendingTickTime < 0 { latency.pendingTickTime = t }
         advance()
-        link?.isPaused = false
+        startFrames()
     }
 
     private func negateDiscrete(_ e: CGEvent) {
@@ -219,9 +264,10 @@ final class Engine: NSObject, @unchecked Sendable {
         e.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: -e.getIntegerValueField(.scrollWheelEventDeltaAxis2))
         e.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: -e.getIntegerValueField(.scrollWheelEventPointDeltaAxis2))
         e.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: -e.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2))
+        e.setIntegerValueField(Synth.fInvertedFromDevice, value: Synth.invertedFromDevice)
     }
 
-    private func swapToHorizontal(_ e: CGEvent) {
+    private func swapToHorizontal(_ e: CGEvent, clearing: UInt64) {
         let d = e.getIntegerValueField(.scrollWheelEventDeltaAxis1)
         let p = e.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)
         let f = e.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
@@ -231,7 +277,7 @@ final class Engine: NSObject, @unchecked Sendable {
         e.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: d)
         e.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: p)
         e.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: f)
-        e.flags = CGEventFlags(rawValue: e.flags.rawValue & ~(1 << 17))
+        e.flags = CGEventFlags(rawValue: e.flags.rawValue & ~clearing)
     }
 
     // MARK: animation (engine thread, outside the callback)
@@ -251,21 +297,45 @@ final class Engine: NSObject, @unchecked Sendable {
             } else {
                 let d = accel.distance(direction: pendingDir[i], at: t, profile: p)
                 let dur = p.duration(tickInterval: accel.lastInterval)
+                pxPlanned += abs(d)
                 if pendingHorizontal[i] {
+                    if vertical.isActive { flush(&vertical, vertical: true) }
                     horizontal.addTick(d, at: t, duration: dur, profile: p)
                 } else {
+                    if horizontal.isActive { flush(&horizontal, vertical: false) }
                     vertical.addTick(d, at: t, duration: dur, profile: p)
                 }
             }
         }
         pendingCount = 0
         advance()
-        link?.isPaused = false
+        startFrames()
     }
 
-    @objc private func frame(_ l: CADisplayLink) {
+    @objc private func frame(_ l: CADisplayLink) { frameTick() }
+
+    private func frameTick() {
         advance()
-        if !vertical.isActive && !horizontal.isActive && !zoom.isActive { l.isPaused = true }
+        if !animating { stopFrames() }
+    }
+
+    /// A wheel tick that arrived while a gesture button was held but didn't become a gesture:
+    /// scroll it normally instead of dropping it.
+    func fallbackScrollTick(direction: Int, at t: Double) {
+        let p = ScrollProfile.make(smoothness: settings.smoothness == .off ? .low : settings.smoothness,
+                                   speed: settings.speed, mode: .normal, screenHeight: screenHeight)
+        let d = accel.distance(direction: direction, at: t, profile: p)
+        if horizontal.isActive { flush(&horizontal, vertical: false) }
+        vertical.addTick(d, at: t, duration: p.duration(tickInterval: accel.lastInterval), profile: p)
+        advance()
+        startFrames()
+    }
+
+    /// Close one axis immediately (only one 2-D gesture may be open at a time, like a trackpad).
+    private func flush(_ a: inout ScrollAnimator, vertical v: Bool) {
+        let out = a.cancel()
+        for i in 0..<out.count { _ = postScroll(out[i], vertical: v) }
+        if v { qv.reset(); vBeganPending = false } else { qh.reset(); hBeganPending = false }
     }
 
     private func advance() {
@@ -283,17 +353,34 @@ final class Engine: NSObject, @unchecked Sendable {
         }
     }
 
+    private var vBeganPending = false, hBeganPending = false
+
     /// Returns true if an event carrying motion was posted.
     private func postScroll(_ e: ScrollEmit, vertical: Bool) -> Bool {
         let px = vertical ? qv.take(e.delta) : qh.take(e.delta)
-        if e.phase == .ended || e.phase == .momentumEnded {
-            if vertical { qv.reset() } else { qh.reset() }
+        var phase = e.phase
+        // Trackpads never send Began/MomentumBegan with zero delta: hold the "began" back until
+        // the first frame that actually moves.
+        if px == 0 && (phase == .began || phase == .changed) {
+            if phase == .began { if vertical { vBeganPending = true } else { hBeganPending = true } }
+            return false
         }
-        // Skip empty "changed" frames; phase boundaries are always posted.
-        if px == 0 && (e.phase == .changed || e.phase == .momentumChanged) { return false }
-        if !trackpadSim && (e.phase == .ended || e.phase == .momentumEnded || px == 0) { return false }
-        Synth.scroll(dy: vertical ? px : 0, dx: vertical ? 0 : px, phase: trackpadSim ? e.phase : nil, flags: emitFlags)
+        if px == 0 && phase == .momentumChanged { return false }
+        if phase == .changed, vertical ? vBeganPending : hBeganPending {
+            phase = .began
+            if vertical { vBeganPending = false } else { hBeganPending = false }
+        }
+        if phase == .ended, vertical ? vBeganPending : hBeganPending {
+            // Gesture never moved a pixel: nothing was begun, so nothing to end.
+            if vertical { vBeganPending = false } else { hBeganPending = false }
+            return false
+        }
+        if !trackpadSim && (phase == .ended || phase == .momentumEnded || phase == .mayBegin || phase == .cancelled || px == 0) { return false }
+        Synth.scroll(dy: vertical ? px : 0, dx: vertical ? 0 : px, phase: trackpadSim ? phase : nil, flags: emitFlags)
         eventsOut += 1
+        pxOut += Double(abs(px))
+        // Drop the sub-pixel remainder only once the whole move (incl. momentum) is over.
+        if phase == .cancelled { if vertical { qv.reset() } else { qh.reset() } }
         return px != 0
     }
 
@@ -305,6 +392,8 @@ final class Engine: NSObject, @unchecked Sendable {
         for i in 0..<oz.count { Synth.magnify(oz[i]) }
         accel.reset()
         zoomAccel.reset()
+        qv.reset(); qh.reset(); vBeganPending = false; hBeganPending = false
+        buttons?.resetAll()
     }
 
     func stop() {

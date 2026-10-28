@@ -41,6 +41,7 @@ enum Gestures {
     private static var lastDelta = 0.0
     private static var kind = SwipeKind.horizontal
     private static var active = false
+    private static var generation = 0
 
     /// Natural scrolling = trackpad gestures follow the fingers; dock swipes mirror the system setting.
     static var natural: Bool {
@@ -52,7 +53,7 @@ enum Gestures {
         guard dockSwipeAvailable, d.isFinite else { return }
         switch phase {
         case .began:
-            kind = k; originOffset = d; active = true
+            kind = k; originOffset = d; active = true; generation += 1
         case .changed:
             guard active, d != 0 else { return }
             originOffset += d
@@ -71,11 +72,14 @@ enum Gestures {
         let ph: ScrollPhase = ended ? .ended : .cancelled
         postDock(phase: ph)
         // The system occasionally drops the end event under load; re-send like MMF does.
-        let k = kind, o = originOffset, ld = lastDelta
+        let k = kind, o = originOffset, ld = lastDelta, gen = generation
         for delay in [0.2, 0.5] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard !active else { return }
-                postDock(phase: ph, kind: k, offset: o, last: ld)
+                // Back on the engine thread; skip if a newer swipe started meanwhile.
+                Engine.shared.perform {
+                    guard !active, generation == gen else { return }
+                    postDock(phase: ph, kind: k, offset: o, last: ld)
+                }
             }
         }
     }
