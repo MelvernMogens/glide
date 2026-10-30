@@ -41,7 +41,7 @@ final class Engine: NSObject, @unchecked Sendable {
     var screenWidth = 1440.0
     var screenSize: CGSize { CGSize(width: screenWidth, height: screenHeight) }
     var qv = Quantizer(), qh = Quantizer()
-    var invertDirection = false          // computed from settings + system natural setting
+    var invertDirection = false          // = settings.reverseDirection
     var smoothingOffForFrontApp = false
     var emitFlags: UInt64 = 0             // flags (minus consumed modifiers) for synthesized events
     var trackpadSim = true
@@ -163,11 +163,12 @@ final class Engine: NSObject, @unchecked Sendable {
     }
 
     private func applySettingsOnThread() {
-        let systemNatural = (CFPreferencesCopyAppValue("com.apple.swipescrolldirection" as CFString, kCFPreferencesAnyApplication) as? Bool) ?? true
-        // Real wheel events already arrive flipped when the system setting is natural.
-        invertDirection = settings.reverseDirection != systemNatural
+        // Same meaning as Mac Mouse Fix: "Reverse direction" flips the system scroll direction for
+        // the mouse only. With macOS Natural scrolling on (trackpad natural), the mouse becomes
+        // traditional: wheel down = page down. The trackpad never passes through this code.
+        invertDirection = settings.reverseDirection
         trackpadSim = settings.trackpadSimulation
-        Synth.invertedFromDevice = settings.reverseDirection ? 1 : 0
+        Synth.invertedFromDevice = 1 // MMF always sets this
         if !settings.enabled { flushAll() }
         buttons?.settingsChanged()
     }

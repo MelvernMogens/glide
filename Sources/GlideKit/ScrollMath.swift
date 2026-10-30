@@ -126,11 +126,10 @@ public struct ScrollProfile: Equatable, Sendable {
                       dragCoef: 23, dragExp: 1.0, stopSpeed: 30, speedup: .init(t: 3, p: 1.33, c: 7.5), swipeMaxInterval: 0.375)
         case .medium: // between Regular and High
             p = .init(minPx: pick(45, 75, 135), maxPx: pick(105, 150, 210), baseDuration: 0.2,
-                      startSlope: 1.8, exitSlope: 0.8,
                       dragCoef: 32, dragExp: 0.85, stopSpeed: 30, speedup: .init(t: 2, p: 1.33, c: 7.5), swipeMaxInterval: 0.5)
         case .high: // MMF "High": long inertial trackpad-like glide.
+            // MMF High: speedSmoothing 0 makes its Bezier base curve a straight line.
             p = .init(minPx: pick(60, 90, 150), maxPx: pick(120, 180, 240), baseDuration: 0.22,
-                      startSlope: 2.4, exitSlope: 0.6,
                       dragCoef: 40, dragExp: 0.7, stopSpeed: 30, speedup: .init(t: 2, p: 1.33, c: 7.5), swipeMaxInterval: 0.6)
         }
         switch mode {
@@ -308,7 +307,7 @@ public struct DragTail: Equatable, Sendable {
 public struct HybridCurve: Equatable, Sendable {
     public let total: Double        // signed
     public let baseDistance: Double // unsigned
-    public let baseDuration: Double
+    public private(set) var baseDuration: Double
     public let s0: Double, s1: Double
     public let tail: DragTail
 
@@ -319,6 +318,28 @@ public struct HybridCurve: Equatable, Sendable {
         let D = abs(total)
         let T = baseDuration, k = s1
         func tail(for db: Double) -> DragTail { DragTail(v0: k * db / T, a: p.dragCoef, b: p.dragExp, stop: p.stopSpeed) }
+        if s0 == 1 && s1 == 1 {
+            // MMF LineHybridCurve: move at D/T, then hand off to a drag tail starting at that
+            // speed; the line covers whatever the tail doesn't (tail-only if the tail is longer).
+            let full = DragTail(v0: D / T, a: p.dragCoef, b: p.dragExp, stop: p.stopSpeed)
+            if full.isEmpty || D == 0 {
+                baseDistance = D; tailDistance = 0; self.tail = full
+            } else if full.distance >= D {
+                // Tail alone: start speed solved so its distance is exactly D (bisection).
+                var lo = p.stopSpeed, hi = D / T
+                for _ in 0..<60 {
+                    let mid = (lo + hi) / 2
+                    if DragTail(v0: mid, a: p.dragCoef, b: p.dragExp, stop: p.stopSpeed).distance > D { hi = mid } else { lo = mid }
+                }
+                let t = DragTail(v0: lo, a: p.dragCoef, b: p.dragExp, stop: p.stopSpeed)
+                baseDistance = 0; tailDistance = D; self.tail = t
+                baseDuration = 0.000001
+            } else {
+                baseDistance = D - full.distance; tailDistance = full.distance; self.tail = full
+                baseDuration = max((D - full.distance) / D * T, 0.000001)
+            }
+            return
+        }
         var lo = 0.0, hi = D
         if tail(for: D).isEmpty || D == 0 {
             lo = D

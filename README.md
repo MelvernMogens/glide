@@ -3,7 +3,7 @@
 A tiny native menu-bar app that makes a normal mouse wheel scroll like the MacBook trackpad.
 
 Glide replaces Mac Mouse Fix on one Mac. It ships with the same out-of-the-box feel: High smoothness,
-Medium speed, natural (reversed) mouse direction, trackpad simulation on, and ⌘ zoom / ⌥ precise /
+Medium speed, reversed mouse direction (traditional wheel while the trackpad stays natural), trackpad simulation on, and ⌘ zoom / ⌥ precise /
 ⇧ horizontal / ⌃ swift modifiers. It has no licence, trial, updater or helper app.
 
 ---

@@ -94,7 +94,7 @@ struct MenuPanel: View {
             HStack {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Reverse direction").font(.system(size: 12))
-                    Text("Natural, like the trackpad").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("Mouse only, trackpad unchanged").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 Spacer()
                 toggle(isOn: $model.settings.reverseDirection)

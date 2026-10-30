@@ -133,7 +133,8 @@ public struct GlideSettings: Codable, Equatable, Sendable {
     public var enabled = true
     public var smoothness: Smoothness = .high
     public var speed: ScrollSpeed = .medium
-    /// true = the mouse wheel scrolls "naturally" like the trackpad, whatever the system setting is.
+    /// true = flip macOS's scroll direction for the mouse only (Mac Mouse Fix "Reverse Direction").
+    /// With Natural scrolling on for the trackpad, this makes the wheel traditional.
     public var reverseDirection = true
     public var trackpadSimulation = true
     public var modifiers = ScrollModifiers()

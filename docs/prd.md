@@ -71,8 +71,8 @@ login · permission watcher · probe / inject / scrollcam / receiver / snapshot 
 |---|---|---|---|---|
 | Off | passthrough (direction/axis only) | – | – | – |
 | Low (= MMF Regular) | 60 → 120 | linear 180→110 ms | a 23, b 1.0, stop 30 px/s | t 3, p 1.33, c 7.5 |
-| Medium | 75 → 150 | ease 200 ms | a 32, b 0.85 | t 2 |
-| High (= MMF High) | 90 → 180 | ease 220 ms | a 40, b 0.7, stop 30 px/s | t 2, p 1.33, c 7.5 |
+| Medium | 75 → 150 | linear 200 ms | a 32, b 0.85 | t 2 |
+| High (= MMF High) | 90 → 180 | linear 220 ms (MMF LineHybridCurve) | a 40, b 0.7, stop 30 px/s | t 2, p 1.33, c 7.5 |
 | ⌥ Precise | 10 → 20 | linear 140 ms | a 15, b 1.05, stop 50 | none |
 | ⌃ Swift | 0.5 → 1.5 × 85 % of screen height | linear 300 ms | a 30, b 0.7 | t 1, p 2, c 10 |
 | ⌘ Zoom | 60 → 120 / 800 magnification | ease 250 ms | none | t 3 |
@@ -89,7 +89,7 @@ Legend: ✅ in Glide · 🔶 partial / different · ❌ cut (reason)
 - ✅ Trackpad Simulation (rubber-band, app momentum) — default ON
 - ✅ Speed Low / Medium / High → Slow / Medium / Fast · ❌ "macOS" speed (Melvern uses Medium)
 - ❌ Always-on "Scroll Precisely" checkbox (the ⌥ modifier covers it)
-- ✅ Reverse Direction, mouse only; the trackpad keeps its own setting
+- ✅ Reverse Direction = flip the system direction for the mouse only (natural trackpad → traditional wheel)
 - ✅ Keyboard modifiers: Zoom ⌘ · Horizontal ⇧ · Swift ⌃ · Precise ⌥, each reassignable, one behaviour per modifier
 - ✅ Acceleration by wheel speed · ✅ fast-scroll ramp over consecutive swipes
 - ✅ Throw and catch: one notch the other way stops the animation
