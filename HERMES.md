@@ -42,7 +42,7 @@ Default is your strongest model + high effort.
 ## Gotchas (each cost a debugging round)
 - Synthesized events are routed by their `location`; `CGEvent(scrollWheelEvent2Source:)` does not fill it — set it to the cursor or nothing receives the event.
 - Occluded windows (other Space, behind a full-screen app) don't receive or render scroll events, so real-app tests need the target window frontmost under the pointer. `postToPid` does not help.
-- macOS "Natural scrolling" flips real wheel deltas before the tap; Glide inverts only when `reverseDirection != system natural`.
+- "Reverse direction" = MMF semantics: flip whatever macOS sends, mouse only. With Natural on (for the trackpad) that makes the wheel traditional. An earlier "natural regardless" reading was wrong — Melvern corrected it.
 - macOS 27 dock swipes ignore CGEvent fields; they need an IOHIDEvent attached with `SLEventSetIOHIDEvent`.
 - TuckBar hides new status items: `defaults write com.melvern.tuckbar sections -dict-add com.melvern.glide visible` and restart TuckBar.
 
