@@ -110,7 +110,9 @@ struct MenuPanel: View {
         if snapshot {
             Capsule().fill(isOn.wrappedValue ? Color.accentColor : Color.gray.opacity(0.4)).frame(width: 26, height: 15)
         } else {
-            Toggle("", isOn: isOn).toggleStyle(.switch).controlSize(.mini).labelsHidden()
+            // Menus are never the key window, so the system switch draws gray even when on.
+            // A tiny custom switch keeps the on-state readable.
+            Toggle("", isOn: isOn).toggleStyle(MiniSwitch()).labelsHidden()
         }
     }
 
@@ -139,5 +141,18 @@ struct MenuPanel: View {
             .labelsHidden()
             .controlSize(.mini)
         }
+    }
+}
+
+/// 26×15 pt switch that always shows its state (blue = on).
+struct MiniSwitch: ToggleStyle {
+    func makeBody(configuration c: Configuration) -> some View {
+        ZStack(alignment: c.isOn ? .trailing : .leading) {
+            Capsule().fill(c.isOn ? Color.accentColor : Color.white.opacity(0.18)).frame(width: 26, height: 15)
+            Circle().fill(Color.white).frame(width: 13, height: 13).padding(1).shadow(radius: 0.5)
+        }
+        .animation(.easeOut(duration: 0.12), value: c.isOn)
+        .contentShape(Rectangle())
+        .onTapGesture { c.isOn.toggle() }
     }
 }

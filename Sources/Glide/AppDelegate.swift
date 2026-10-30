@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let args = CommandLine.arguments
+        if args.contains("--request-access") && !AXIsProcessTrusted() { model.openAccessibilitySettings() }
         if args.contains("--settings") { SettingsWindow.shared.show(model: model) }
         if args.contains("--open-menu") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.menu.popUpForTesting() }
